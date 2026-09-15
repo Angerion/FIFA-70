@@ -1,0 +1,6 @@
+{
+  "name": "FIFA 70",
+  "description": "Retro 1970s arcade soccer game with national teams and online multiplayer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
