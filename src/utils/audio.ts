@@ -224,6 +224,27 @@ class AudioEngine {
     osc1.stop(t + 1);
     osc2.stop(t + 1);
   }
+  playHey() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(600, t);
+    osc.frequency.linearRampToValueAtTime(800, t + 0.1);
+
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.2, t + 0.02);
+    gain.gain.setValueAtTime(0.2, t + 0.08);
+    gain.gain.linearRampToValueAtTime(0, t + 0.15);
+
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.15);
+  }
+
 }
 
 export const audio = new AudioEngine();

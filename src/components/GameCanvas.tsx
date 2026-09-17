@@ -157,12 +157,19 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
     const getFormation = (team: 'home'|'away') => {
       const dir = team === 'home' ? 1 : -1;
       const bx = team === 'home' ? 0 : width;
+      // Staggered 4-3-3 formation to break up lines
       return [
-        { x: bx + dir * 40, y: height/2, isGK: true },
-        { x: bx + dir * 120, y: 100, isGK: false }, { x: bx + dir * 120, y: 200, isGK: false },
-        { x: bx + dir * 120, y: 300, isGK: false }, { x: bx + dir * 120, y: 400, isGK: false },
-        { x: bx + dir * 220, y: 150, isGK: false }, { x: bx + dir * 220, y: 250, isGK: false }, { x: bx + dir * 220, y: 350, isGK: false },
-        { x: bx + dir * 320, y: 150, isGK: false }, { x: bx + dir * 320, y: 250, isGK: false }, { x: bx + dir * 320, y: 350, isGK: false },
+        { x: bx + dir * 40, y: height/2, isGK: true }, // GK
+        { x: bx + dir * 130, y: 80, isGK: false },  // LB (pushed wide)
+        { x: bx + dir * 110, y: 190, isGK: false }, // CB
+        { x: bx + dir * 110, y: 310, isGK: false }, // CB
+        { x: bx + dir * 130, y: 420, isGK: false }, // RB (pushed wide)
+        { x: bx + dir * 210, y: 120, isGK: false }, // LM (spread)
+        { x: bx + dir * 190, y: 250, isGK: false }, // CM (deeper)
+        { x: bx + dir * 210, y: 380, isGK: false }, // RM (spread)
+        { x: bx + dir * 300, y: 100, isGK: false }, // LW (high and wide)
+        { x: bx + dir * 330, y: 250, isGK: false }, // ST (highest)
+        { x: bx + dir * 300, y: 400, isGK: false }, // RW (high and wide)
       ];
     };
 
@@ -182,6 +189,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
     let passTarget: PlayerEntity | null = null;
     let score = { home: 0, away: 0 };
     let lastBallOwner: PlayerEntity | null = null;
+    let aiPassCooldown = 0;
 
     // Referee
     const ref = { pos: new Vec2(width/2, height/2 - 50), vel: new Vec2(0,0), radius: 7.6 };
@@ -254,6 +262,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
       const isGameplayPhase = matchPhase === '1st' || matchPhase === '2nd' || matchPhase === 'Goal';
       
       if (!isPausedRef.current && isGameplayPhase) {
+        if (aiPassCooldown > 0) aiPassCooldown--;
+
         // 1. Determine Active Home Player
       if (ballOwner && ballOwner.team === 'home') {
         activeHomePlayer = ballOwner;
@@ -269,12 +279,22 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
           if (p.team === 'home' && p !== activeHomePlayer) {
             const dir = p.pos.sub(ballOwner!.pos);
             const dist = dir.mag();
-            if (dist > 20 && dist < 300) { 
+            if (dist > 20 && dist < 350) { 
               const dirNorm = dir.norm();
               const dot = dirNorm.x * ballOwner!.facing.x + dirNorm.y * ballOwner!.facing.y;
               if (dot > 0.5) { // Roughly within 60 degrees
                  const angle = Math.acos(dot);
-                 const score = -angle * 50 - dist * 0.1;
+                 
+                 // If tapping pass (charge < 10), target closest. Otherwise use charge to estimate distance.
+                 let distScore = 0;
+                 if (passCharge < 10) {
+                     distScore = -dist; // Prioritize closer
+                 } else {
+                     const targetDist = Math.max(40, passCharge * 3.5);
+                     distScore = -Math.abs(dist - targetDist);
+                 }
+
+                 const score = -angle * 50 + distScore * 0.5 + (p.calloutTimer > 0 ? 50 : 0);
                  if (score > bestScore) {
                    bestScore = score;
                    passTarget = p;
@@ -321,6 +341,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
                     p.isJumping = false;
                     ballOwner = p;
                     lastBallOwner = p;
+                    aiPassCooldown = 42; // Prevent immediate ping-pong passing upon receive
                     ball.vel = new Vec2(0,0);
                     audio.playBounce();
                     break;
@@ -328,6 +349,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
               } else {
                  ballOwner = p;
                  lastBallOwner = p;
+                 aiPassCooldown = 42; // Prevent immediate ping-pong passing upon receive
                  ball.vel = new Vec2(0,0);
                  audio.playBounce();
                  break;
@@ -342,10 +364,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
 
       allPlayers.forEach(p => {
         if (p.cooldown > 0) p.cooldown--;
+        if (p.calloutTimer > 0) p.calloutTimer--;
         
         let targetVel = new Vec2(0,0);
         const speedStat = Math.max(30, p.data.stats.speed);
-        let maxSpeed = 0.75 + (speedStat / 100) * 0.15; // Closer speed matching
+        let maxSpeed = (0.75 + (speedStat / 100) * 0.15) * 1.10; // ~10% faster total
 
         // Stamina Recovery/Drain logic
         if (p === activeHomePlayer && keys.current['shift'] && p.stamina > 0 && p.cooldown <= 0) {
@@ -370,12 +393,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
 
             if (targetVel.mag() > 0) {
               const targetDir = targetVel.norm();
+              p.facing = targetDir;
               if (ballOwner === p) {
-                 // Turning inertia when holding ball
-                 p.facing = p.facing.mul(0.85).add(targetDir.mul(0.15)).norm();
-                 targetVel = p.facing.mul(maxSpeed * 0.9); // slightly slower when dribbling
+                 targetVel = targetDir.mul(maxSpeed * 0.9); // slightly slower when dribbling
               } else {
-                 p.facing = targetDir;
                  targetVel = targetDir.mul(maxSpeed);
               }
             }
@@ -560,14 +581,74 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
             } else if (ballOwner === p) {
               // AI has ball, drive to goal
               dest = new Vec2(p.team === 'home' ? width : 0, height/2);
+              
+              // Evaluate passing
+              if (aiPassCooldown <= 0 && Math.random() < 0.05) { // evaluate occasionally
+                 // Check for defenders nearby
+                 const nearestDefender = allPlayers.find(opp => opp.team !== p.team && !opp.isGK && opp.pos.sub(p.pos).mag() < 60);
+                 
+                 if (nearestDefender || Math.random() < 0.2) { // Need to pass or just feels like it
+                    // Find a good teammate
+                    const attackDir = p.team === 'home' ? 1 : -1;
+                    let bestTeammate = null;
+                    let bestTeammateScore = -Infinity;
+                    
+                    allPlayers.forEach(tm => {
+                       if (tm.team === p.team && tm !== p && !tm.isGK) {
+                          const dist = tm.pos.sub(p.pos).mag();
+                          if (dist > 40 && dist < 450) { // Can see further
+                             const isForward = (tm.pos.x - p.pos.x) * attackDir > 0;
+                             const distToGoal = Math.abs(tm.pos.x - (p.team === 'home' ? width : 0));
+                             // Heavily punish backwards passes, strongly reward forward passes
+                             const score = (isForward ? 120 : -150) - distToGoal + (Math.random() * 30);
+                             if (score > bestTeammateScore) {
+                                bestTeammateScore = score;
+                                bestTeammate = tm;
+                             }
+                          }
+                       }
+                    });
+                    
+                    if (bestTeammate) {
+                       const passDir = (bestTeammate as PlayerEntity).pos.sub(p.pos).norm();
+                       
+                       // simple check if defender is between
+                       let needsLob = false;
+                       allPlayers.forEach(opp => {
+                          if (opp.team !== p.team && !opp.isGK) {
+                             const toOpp = opp.pos.sub(p.pos);
+                             if (toOpp.mag() < (bestTeammate as PlayerEntity).pos.sub(p.pos).mag()) {
+                                const dot = toOpp.norm().x * passDir.x + toOpp.norm().y * passDir.y;
+                                if (dot > 0.9) needsLob = true;
+                             }
+                          }
+                       });
+
+                       ballOwner = null;
+                       audio.playKick();
+                       if (needsLob) {
+                          ball.vz = 6;
+                          ball.vel = passDir.mul(5);
+                       } else {
+                          ball.vel = passDir.mul(7);
+                       }
+                       p.cooldown = 15;
+                       aiPassCooldown = 42; // ~0.7s hidden cooldown for AI passes
+                    }
+                 }
+              }
+
               // AI Shoot logic
-              const distToGoal = Math.abs(p.pos.x - (p.team === 'home' ? width : 0));
-              if (distToGoal < 200 && Math.random() < 0.05) {
-                 ballOwner = null;
-                 audio.playKick();
-                 const targetGoal = new Vec2(p.team === 'home' ? width : 0, height/2 + (Math.random()*40-20));
-                 ball.vel = targetGoal.sub(p.pos).norm().mul(12 * (p.data.stats.shooting/60));
-                 p.cooldown = 20;
+              if (ballOwner === p) {
+                const distToGoal = Math.abs(p.pos.x - (p.team === 'home' ? width : 0));
+                // Shoot from much further (was 200), and more often (was 0.05)
+                if (distToGoal < 380 && Math.random() < (distToGoal < 200 ? 0.1 : 0.04)) {
+                   ballOwner = null;
+                   audio.playKick();
+                   const targetGoal = new Vec2(p.team === 'home' ? width : 0, height/2 + (Math.random()*50-25));
+                   ball.vel = targetGoal.sub(p.pos).norm().mul(12 * (p.data.stats.shooting/60));
+                   p.cooldown = 20;
+                }
               }
             } else {
               // Base tactical position
@@ -577,29 +658,59 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
                 if (tacticsRef.current === 'defensive') tacticShift = -60;
               }
               
-              let shiftX = (ball.pos.x - width/2) * 0.3 + tacticShift;
-              const teamHasBall = ballOwner && ballOwner.team === p.team;
+              const individualTracking = 0.2 + (p.randomSeed % 0.2); 
+              let shiftX = (ball.pos.x - width/2) * individualTracking + tacticShift;
+              let shiftY = (ball.pos.y - height/2) * (0.1 + (p.randomSeed % 0.15));
               
-              if (teamHasBall && ballOwner) {
-                 const attackDir = p.team === 'home' ? 1 : -1;
-                 const isMovingForward = (ballOwner.vel.x * attackDir) > 0.5;
-                 const isInEnemyHalf = (ballOwner.pos.x - width/2) * attackDir > 0;
+              // Use lastBallOwner so the team doesn't collapse during the split second a pass is in the air
+              const teamHasPossession = (ballOwner && ballOwner.team === p.team) || (!ballOwner && lastBallOwner && lastBallOwner.team === p.team);
+              
+              const attackDir = p.team === 'home' ? 1 : -1;
+              const fieldPos = (p.basePos.x - width/2) * attackDir; // > 0 is attacking half, < 0 is defensive half
+              const isWide = Math.abs(p.basePos.y - height/2) > 80;
+              
+              if (teamHasPossession) {
+                 const referencePlayer = ballOwner || lastBallOwner;
+                 const isMovingForward = referencePlayer ? (referencePlayer.vel.x * attackDir) > 0.5 : false;
+                 const isInEnemyHalf = referencePlayer ? (referencePlayer.pos.x - width/2) * attackDir > 0 : false;
                  
-                 // If the controlled player (or any ball owner) is pushing forward, make the team follow
                  if (isMovingForward || isInEnemyHalf) {
-                    shiftX += 100 * attackDir; // Push the whole line forward
-                    
-                    // Attackers push even deeper into the box
-                    const isAttacker = (p.basePos.x - width/2) * attackDir > 10;
-                    if (isAttacker) {
-                       shiftX += 60 * attackDir;
+                    // Wide players hug the touchline
+                    if (isWide) {
+                        shiftY += (p.basePos.y > height/2 ? 50 : -50);
                     }
+
+                    if (fieldPos > 10) { 
+                       // Attacker
+                       shiftX += (150 + (p.randomSeed % 50)) * attackDir;
+                    } else if (fieldPos > -50) { 
+                       // Midfielder
+                       shiftX += (100 + (p.randomSeed % 40)) * attackDir;
+                    } else { 
+                       // Defender
+                       shiftX += (50 + (p.randomSeed % 20)) * attackDir;
+                    }
+                 }
+              } else {
+                 // Defending: players drop back uniquely
+                 shiftX -= (30 + (p.randomSeed % 30)) * attackDir;
+                 // converge slightly on the center
+                 shiftY += (height/2 - p.basePos.y) * 0.2;
+              }
+              
+              let targetBaseX = Math.max(40, Math.min(width - 40, p.basePos.x + shiftX));
+              
+              if (fieldPos > 10) {
+                 const ballDeepInDefense = (ball.pos.x - width/2) * attackDir < -150;
+                 if (!ballDeepInDefense) {
+                     // Clamp targetBaseX so attackers don't go back into defensive half
+                     if (attackDir === 1) targetBaseX = Math.max(width/2 + 20, targetBaseX);
+                     else targetBaseX = Math.min(width/2 - 20, targetBaseX);
                  }
               }
 
-              // Clamp shift so players don't go out of bounds
-              const targetBaseX = Math.max(40, Math.min(width - 40, p.basePos.x + shiftX));
-              let baseDest = new Vec2(targetBaseX, p.basePos.y);
+              const targetBaseY = Math.max(20, Math.min(height - 20, p.basePos.y + shiftY));
+              let baseDest = new Vec2(targetBaseX, targetBaseY);
 
               // Smart Positioning (Marking vs Finding Space)
               let smartOffset = new Vec2(0, 0);
@@ -618,10 +729,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
 
               if (nearestOpp) {
                  const toOpp = nearestOpp.pos.sub(baseDest);
-                 if (teamHasBall) {
+                 if (teamHasPossession) {
                     // Find open space (move away from nearest opponent)
                     if (minBaseDist < 100 && minBaseDist > 0) {
-                       smartOffset = toOpp.norm().mul(-60); 
+                       smartOffset = toOpp.norm().mul(-50 - (p.randomSeed % 30)); 
+                    }
+                    
+                    if (fieldPos > -50) { // Attackers and Midfielders actively seek space
+                       smartOffset.x += (40 + (p.randomSeed % 40)) * attackDir;
+                       const verticalSpread = p.basePos.y < height/2 ? -40 : 40;
+                       smartOffset.y += verticalSpread + (p.randomSeed % 20);
                     } else {
                        // Push forward slightly when attacking
                        smartOffset = new Vec2(p.team === 'home' ? 40 : -40, 0);
@@ -629,27 +746,39 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
                  } else {
                     // Mark opponent (move towards nearest opponent in zone)
                     if (minBaseDist < 150) {
-                       smartOffset = toOpp.mul(0.75);
+                       smartOffset = toOpp.mul(0.6 + (p.randomSeed % 0.3));
                     }
                  }
               }
               
               const timeSec = performance.now() / 1000;
-              const idHash = p.data.id.charCodeAt(0) || 0;
-              const jitterX = Math.sin(timeSec * 2 + idHash) * 15;
-              const jitterY = Math.cos(timeSec * 1.5 + idHash) * 15;
+              const jitterSpeed = 1.5 + (p.randomSeed % 1.5);
+              const jitterX = Math.sin(timeSec * jitterSpeed + p.randomSeed) * (10 + (p.randomSeed % 10));
+              const jitterY = Math.cos(timeSec * (jitterSpeed * 0.8) + p.randomSeed) * (10 + (p.randomSeed % 10));
+              
               dest = new Vec2(baseDest.x + smartOffset.x + jitterX, baseDest.y + smartOffset.y + jitterY);
             }
 
             const dir = dest.sub(p.pos);
             if (dir.mag() > 5) {
               const targetDir = dir.norm();
+              p.facing = targetDir;
               if (ballOwner === p) {
-                 p.facing = p.facing.mul(0.85).add(targetDir.mul(0.15)).norm();
-                 targetVel = p.facing.mul(aiMaxSpeed * 0.9);
+                 targetVel = targetDir.mul(aiMaxSpeed * 0.9);
               } else {
-                 p.facing = targetDir;
                  targetVel = targetDir.mul(aiMaxSpeed * (p === activeAwayPlayer ? 0.95 : 0.85));
+                 
+                 // Automatic callout for home team players running into attack positions
+                 if (p.team === 'home' && ballOwner && ballOwner.team === 'home' && p.calloutTimer <= 0) {
+                     const isForward = targetDir.x > 0.3; // Sprinting towards right goal
+                     const inAttackingHalf = p.pos.x > width / 2;
+                     // Ensure no enemy is nearby
+                     const open = allPlayers.every(opp => opp.team === 'home' || opp.pos.sub(p.pos).mag() > 80);
+                     if (isForward && inAttackingHalf && open && Math.random() < 0.02) {
+                         p.calloutTimer = 60;
+                         audio.playHey();
+                     }
+                 }
               }
             }
           }
@@ -826,7 +955,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
 
       // Players
       allPlayers.forEach(p => {
-         Renderer.renderPlayer(ctx, p, p === activeHomePlayer);
+         Renderer.renderPlayer(ctx, p, p === activeHomePlayer, p === ballOwner);
       });
 
       Renderer.renderIndicators(ctx, passTarget, ballOwner, activeHomePlayer, mousePos.current);

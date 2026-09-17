@@ -54,16 +54,29 @@ export function renderReferee(ctx: CanvasRenderingContext2D, ref: { pos: Vec2; r
   ctx.restore();
 }
 
-export function renderPlayer(ctx: CanvasRenderingContext2D, p: PlayerEntity, isActive: boolean) {
+export function renderPlayer(ctx: CanvasRenderingContext2D, p: PlayerEntity, isActive: boolean, isBallOwner: boolean = false) {
+  // Callout visual (Hey!)
+  if (p.calloutTimer > 0) {
+    ctx.beginPath();
+    ctx.arc(p.pos.x + p.radius + 8, p.pos.y - p.radius - 8, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ef4444'; // Red bubble
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '8px "Press Start 2P"';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('!', p.pos.x + p.radius + 8, p.pos.y - p.radius - 7);
+  }
+
   // Active indicator
   if (isActive) {
     const bounce = Math.sin(performance.now() / 150) * 4;
 
     // Outer highlight ring
     ctx.beginPath();
-    ctx.arc(p.pos.x, p.pos.y, p.radius * 2, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(250, 204, 21, 0.4)';
-    ctx.lineWidth = 4;
+    ctx.arc(p.pos.x, p.pos.y, p.radius * (isBallOwner ? 2.5 : 2), 0, Math.PI * 2);
+    ctx.strokeStyle = isBallOwner ? 'rgba(250, 204, 21, 0.8)' : 'rgba(250, 204, 21, 0.4)';
+    ctx.lineWidth = isBallOwner ? 6 : 4;
     ctx.stroke();
 
     // Yellow Arrow

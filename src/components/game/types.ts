@@ -6,7 +6,7 @@ export class PlayerEntity {
   vel: Vec2 = new Vec2(0,0);
   moveVel: Vec2 = new Vec2(0,0);
   facing: Vec2 = new Vec2(1,0);
-  radius: number = 7.6;
+  radius: number = 7.22; // 5% smaller
   basePos: Vec2;
   cooldown: number = 0;
   stamina: number = 100;
@@ -19,6 +19,8 @@ export class PlayerEntity {
   hasYellowCard: boolean = false;
   isJumping: boolean = false;
   jumpDistance: number = 0;
+  calloutTimer: number = 0;
+  randomSeed: number = Math.random() * 1000;
 
   constructor(
     public data: PlayerData,
