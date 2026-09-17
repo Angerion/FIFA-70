@@ -10,11 +10,14 @@ export function renderPitch(ctx: CanvasRenderingContext2D, width: number, height
   ctx.strokeStyle = 'rgba(255,255,255,0.4)';
   ctx.lineWidth = 3;
 
-  ctx.beginPath();
   // Center line
+  ctx.beginPath();
   ctx.moveTo(width / 2, 0);
   ctx.lineTo(width / 2, height);
+  ctx.stroke();
+
   // Center circle
+  ctx.beginPath();
   ctx.arc(width / 2, height / 2, 50, 0, Math.PI * 2);
   ctx.stroke();
 
