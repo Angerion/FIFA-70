@@ -13,7 +13,7 @@ import { GameCanvas } from "./components/GameCanvas";
 type Screen = "menu" | "country_select" | "roster" | "match" | "wc_hub" | "wc_select";
 
 function Game() {
-  const { profile, addCoins, buyPlayer, buyMultiplier } = useGame();
+  const { profile, addCoins, addRawCoins, buyPlayer, buyMultiplier, resetProfile } = useGame();
   const [currentScreen, setCurrentScreen] = useState<Screen>("menu");
   const [selectedTeam, setSelectedTeam] = useState<string>("BRA");
 
@@ -44,7 +44,7 @@ function Game() {
   };
 
   const handleMatchEnd = (stats: any) => {
-    let coinsEarned = 0;
+    let coinsEarned = 1000;
     
     if (!isWcMode) {
       if (stats.result === "win") coinsEarned += 100;
@@ -408,6 +408,26 @@ function Game() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Developer / Cheat Tools */}
+      <div className="fixed bottom-4 right-4 z-50 flex gap-2">
+        <button
+          onClick={() => addRawCoins(1000)}
+          className="bg-yellow-500 text-black px-3 py-2 text-[10px] font-bold uppercase border-2 border-black hover:bg-yellow-400"
+        >
+          +1000 Coins
+        </button>
+        <button
+          onClick={() => {
+             if (window.confirm("Are you sure you want to reset your account? This will erase all your bought players and multipliers.")) {
+                 resetProfile();
+             }
+          }}
+          className="bg-red-600 text-white px-3 py-2 text-[10px] font-bold uppercase border-2 border-black hover:bg-red-500"
+        >
+          Reset Account
+        </button>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,8 @@ import { TEAMS_1970 } from '../data/teams';
 import { PLAYERS_1970 } from '../data/players';
 import { Player as PlayerData } from '../types';
 import { audio } from '../utils/audio';
+import { PlayerEntity } from './game/types';
+import * as Renderer from './game/renderers';
 
 interface GameCanvasProps {
   homeTeamId: string;
@@ -21,40 +23,7 @@ class Vec2 {
   norm() { const m = this.mag(); return m === 0 ? new Vec2(0,0) : new Vec2(this.x/m, this.y/m); }
 }
 
-class PlayerEntity {
-  pos: Vec2;
-  vel: Vec2 = new Vec2(0,0);
-  moveVel: Vec2 = new Vec2(0,0);
-  facing: Vec2 = new Vec2(1,0);
-  radius: number = 7.6;
-  basePos: Vec2;
-  cooldown: number = 0;
-  stamina: number = 100;
-  staminaDelay: number = 0;
-  isGK: boolean;
-  distanceTraveled: number = 0;
-  celebrationPhase: number = 0;
-  isScorer: boolean = false;
-  hasRedCard: boolean = false;
-  hasYellowCard: boolean = false;
-  isJumping: boolean = false;
-  jumpDistance: number = 0;
 
-  constructor(
-    public data: PlayerData,
-    public team: 'home' | 'away',
-    public colorPrimary: string,
-    public colorSecondary: string,
-    startX: number,
-    startY: number,
-    isGK: boolean
-  ) {
-    this.pos = new Vec2(startX, startY);
-    this.basePos = new Vec2(startX, startY);
-    this.isGK = isGK;
-    this.facing = team === 'home' ? new Vec2(1,0) : new Vec2(-1,0);
-  }
-}
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, bannedPlayerIds, onQuit, onMatchEnd }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -219,7 +188,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
 
     let lastTime = performance.now();
     let gameClockMs = 0;
-    const TIME_SCALE = 7.5; // 12 real mins = 90 game mins
+    const TIME_SCALE = 15.0; // 6 real mins = 90 game mins
     let matchPhase = 'Intro1st';
     let kickoffTeam: 'home' | 'away' = Math.random() > 0.5 ? 'home' : 'away';
 
@@ -376,8 +345,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
         
         let targetVel = new Vec2(0,0);
         const speedStat = Math.max(30, p.data.stats.speed);
-        // Reduce global speed by 15% (previously * 1.15, now * 0.85)
-        let maxSpeed = (speedStat / 80) * 0.85; 
+        let maxSpeed = 0.75 + (speedStat / 100) * 0.15; // Closer speed matching
 
         // Stamina Recovery/Drain logic
         if (p === activeHomePlayer && keys.current['shift'] && p.stamina > 0 && p.cooldown <= 0) {
@@ -608,17 +576,38 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
                 if (tacticsRef.current === 'aggressive') tacticShift = 60;
                 if (tacticsRef.current === 'defensive') tacticShift = -60;
               }
-              const shiftX = (ball.pos.x - width/2) * 0.3 + tacticShift;
-              let baseDest = new Vec2(p.basePos.x + shiftX, p.basePos.y);
+              
+              let shiftX = (ball.pos.x - width/2) * 0.3 + tacticShift;
+              const teamHasBall = ballOwner && ballOwner.team === p.team;
+              
+              if (teamHasBall && ballOwner) {
+                 const attackDir = p.team === 'home' ? 1 : -1;
+                 const isMovingForward = (ballOwner.vel.x * attackDir) > 0.5;
+                 const isInEnemyHalf = (ballOwner.pos.x - width/2) * attackDir > 0;
+                 
+                 // If the controlled player (or any ball owner) is pushing forward, make the team follow
+                 if (isMovingForward || isInEnemyHalf) {
+                    shiftX += 100 * attackDir; // Push the whole line forward
+                    
+                    // Attackers push even deeper into the box
+                    const isAttacker = (p.basePos.x - width/2) * attackDir > 10;
+                    if (isAttacker) {
+                       shiftX += 60 * attackDir;
+                    }
+                 }
+              }
+
+              // Clamp shift so players don't go out of bounds
+              const targetBaseX = Math.max(40, Math.min(width - 40, p.basePos.x + shiftX));
+              let baseDest = new Vec2(targetBaseX, p.basePos.y);
 
               // Smart Positioning (Marking vs Finding Space)
-              const teamHasBall = ballOwner && ballOwner.team === p.team;
               let smartOffset = new Vec2(0, 0);
 
               let nearestOpp = null;
               let minBaseDist = Infinity;
               for (let opp of allPlayers) {
-                 if (opp.team !== p.team) {
+                 if (opp.team !== p.team && !opp.isGK) {
                     const d = opp.pos.sub(baseDest).mag();
                     if (d < minBaseDist) {
                        minBaseDist = d;
@@ -631,23 +620,24 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
                  const toOpp = nearestOpp.pos.sub(baseDest);
                  if (teamHasBall) {
                     // Find open space (move away from nearest opponent)
-                    if (minBaseDist < 80 && minBaseDist > 0) {
-                       smartOffset = toOpp.norm().mul(-50); 
+                    if (minBaseDist < 100 && minBaseDist > 0) {
+                       smartOffset = toOpp.norm().mul(-60); 
                     } else {
                        // Push forward slightly when attacking
-                       smartOffset = new Vec2(p.team === 'home' ? 30 : -30, 0);
+                       smartOffset = new Vec2(p.team === 'home' ? 40 : -40, 0);
                     }
                  } else {
                     // Mark opponent (move towards nearest opponent in zone)
-                    if (minBaseDist < 120) {
-                       smartOffset = toOpp.mul(0.7);
+                    if (minBaseDist < 150) {
+                       smartOffset = toOpp.mul(0.75);
                     }
                  }
               }
               
               const timeSec = performance.now() / 1000;
-              const jitterX = Math.sin(timeSec * 2 + p.data.id) * 15;
-              const jitterY = Math.cos(timeSec * 1.5 + p.data.id) * 15;
+              const idHash = p.data.id.charCodeAt(0) || 0;
+              const jitterX = Math.sin(timeSec * 2 + idHash) * 15;
+              const jitterY = Math.cos(timeSec * 1.5 + idHash) * 15;
               dest = new Vec2(baseDest.x + smartOffset.x + jitterX, baseDest.y + smartOffset.y + jitterY);
             }
 
@@ -659,7 +649,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
                  targetVel = p.facing.mul(aiMaxSpeed * 0.9);
               } else {
                  p.facing = targetDir;
-                 targetVel = targetDir.mul(aiMaxSpeed * (p === activeAwayPlayer ? 0.75 : 0.5));
+                 targetVel = targetDir.mul(aiMaxSpeed * (p === activeAwayPlayer ? 0.95 : 0.85));
               }
             }
           }
@@ -831,208 +821,17 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({ homeTeamId, awayTeamId, 
       }
 
       // 5. Draw
-      ctx.fillStyle = '#2d6a4f';
-      ctx.fillRect(0, 0, width, height);
-
-      // Lines
-      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-      ctx.lineWidth = 3;
-      
-      // Center line
-      ctx.beginPath();
-      ctx.moveTo(width/2, 0); 
-      ctx.lineTo(width/2, height);
-      ctx.stroke();
-      
-      // Center circle
-      ctx.beginPath();
-      ctx.arc(width/2, height/2, 60, 0, Math.PI*2);
-      ctx.stroke();
-
-      // Boxes
-      ctx.strokeRect(0, height/2 - 80, 60, 160); // Home Box
-      ctx.strokeRect(width-60, height/2 - 80, 60, 160); // Away Box
-
-      // Goal nets
-      ctx.fillStyle = 'rgba(200,200,200,0.2)';
-      ctx.fillRect(0, height/2 - 60, 20, 120);
-      ctx.fillRect(width-20, height/2 - 60, 20, 120);
-
-      // Referee
-      ctx.save();
-      ctx.translate(ref.pos.x, ref.pos.y);
-      const refAngle = Math.atan2(ref.vel.y, ref.vel.x);
-      ctx.rotate(refAngle);
-      // Body
-      ctx.fillStyle = '#000'; // Black shirt
-      ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(-ref.radius*0.6, -ref.radius*1.4, ref.radius*1.4, ref.radius*2.8, 6);
-      else ctx.rect(-ref.radius*0.6, -ref.radius*1.4, ref.radius*1.4, ref.radius*2.8);
-      ctx.fill();
-      ctx.stroke();
-      // Head
-      ctx.fillStyle = '#fca5a5';
-      ctx.beginPath();
-      ctx.arc(0, 0, ref.radius * 0.7, 0, Math.PI*2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
+      Renderer.renderPitch(ctx, width, height);
+      Renderer.renderReferee(ctx, ref, Math.atan2(ref.vel.y, ref.vel.x));
 
       // Players
       allPlayers.forEach(p => {
-        // Active indicator
-        if (p === activeHomePlayer) {
-          const bounce = Math.sin(performance.now() / 150) * 4;
-          
-          // Outer highlight ring
-          ctx.beginPath();
-          ctx.arc(p.pos.x, p.pos.y, p.radius * 2, 0, Math.PI*2);
-          ctx.strokeStyle = 'rgba(250, 204, 21, 0.4)';
-          ctx.lineWidth = 4;
-          ctx.stroke();
-
-          // Yellow Arrow
-          ctx.beginPath();
-          ctx.moveTo(p.pos.x, p.pos.y - p.radius - 12 + bounce);
-          ctx.lineTo(p.pos.x - 8, p.pos.y - p.radius - 24 + bounce);
-          ctx.lineTo(p.pos.x + 8, p.pos.y - p.radius - 24 + bounce);
-          ctx.fillStyle = '#facc15'; // yellow arrow
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = '#000';
-          ctx.stroke();
-        }
-
-        // Top-Down Player Shape
-        const angle = Math.atan2(p.facing.y, p.facing.x);
-        ctx.save();
-        ctx.translate(p.pos.x, p.pos.y);
-        
-        // Celebration logic override for drawing
-        if (p.celebrationPhase > 0) {
-           ctx.rotate(angle + p.celebrationPhase); // spin
-        } else if (p.isJumping) {
-           ctx.rotate(angle);
-           ctx.scale(1.5, 0.8); // stretch out to look like a dive
-        } else {
-           ctx.rotate(angle);
-        }
-
-        const swing = Math.sin(p.distanceTraveled * 0.15) * p.radius * 0.8;
-
-        // Feet (Boots)
-        ctx.fillStyle = '#111';
-        ctx.beginPath();
-        ctx.arc(-p.radius*0.4 + swing, -p.radius*0.8, p.radius*0.35, 0, Math.PI*2);
-        ctx.arc(-p.radius*0.4 - swing, p.radius*0.8, p.radius*0.35, 0, Math.PI*2);
-        ctx.fill();
-
-        // Body (Shoulders)
-        ctx.fillStyle = p.isGK ? '#1f2937' : p.colorPrimary; // Dark gray for GK
-        ctx.beginPath();
-        if (ctx.roundRect) {
-            ctx.roundRect(-p.radius*0.6, -p.radius*1.4, p.radius*1.4, p.radius*2.8, 6);
-        } else {
-            ctx.rect(-p.radius*0.6, -p.radius*1.4, p.radius*1.4, p.radius*2.8);
-        }
-        ctx.fill();
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = '#000';
-        ctx.stroke();
-
-        // Hands
-        ctx.fillStyle = '#fca5a5';
-        ctx.beginPath();
-        
-        let lHandX = p.radius*0.2 - swing;
-        let rHandX = p.radius*0.2 + swing;
-        let lHandY = -p.radius*1.4;
-        let rHandY = p.radius*1.4;
-
-        if (p.celebrationPhase > 0) {
-           // Arms out
-           lHandY = -p.radius*2.2;
-           rHandY = p.radius*2.2;
-           lHandX = p.radius*0.5;
-           rHandX = p.radius*0.5;
-        }
-
-        ctx.arc(lHandX, lHandY, p.radius*0.4, 0, Math.PI*2);
-        ctx.arc(rHandX, rHandY, p.radius*0.4, 0, Math.PI*2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Head
-        ctx.fillStyle = '#fca5a5';
-        ctx.beginPath();
-        ctx.arc(0, 0, p.radius * 0.7, 0, Math.PI*2);
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.restore();
+         Renderer.renderPlayer(ctx, p, p === activeHomePlayer);
       });
 
-      // Pass Assist Target Indicator
-      if (passTarget && ballOwner === activeHomePlayer && mousePos.current.x === 0 && mousePos.current.y === 0) {
-         ctx.beginPath();
-         ctx.arc(passTarget.pos.x, passTarget.pos.y - passTarget.radius - 10, 4, 0, Math.PI*2);
-         ctx.fillStyle = '#60a5fa'; // Blue dot for pass
-         ctx.fill();
-         ctx.stroke();
-      }
-
-      // Mouse Aim Indicator
-      if (mousePos.current.x > 0 || mousePos.current.y > 0) {
-         ctx.beginPath();
-         ctx.arc(mousePos.current.x, mousePos.current.y, 6, 0, Math.PI*2);
-         ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-         ctx.lineWidth = 2;
-         ctx.stroke();
-         ctx.beginPath();
-         ctx.moveTo(mousePos.current.x - 10, mousePos.current.y);
-         ctx.lineTo(mousePos.current.x + 10, mousePos.current.y);
-         ctx.moveTo(mousePos.current.x, mousePos.current.y - 10);
-         ctx.lineTo(mousePos.current.x, mousePos.current.y + 10);
-         ctx.stroke();
-      }
-
-      // Ball Shadow
-      if (ball.z > 0) {
-         ctx.beginPath();
-         ctx.arc(ball.pos.x, ball.pos.y, ball.radius * 0.8, 0, Math.PI*2);
-         ctx.fillStyle = 'rgba(0,0,0,0.3)';
-         ctx.fill();
-      }
-
-      // Ball
-      const renderScale = 1 + (ball.z / 100);
-      ctx.beginPath();
-      ctx.arc(ball.pos.x, ball.pos.y - ball.z, ball.radius * renderScale, 0, Math.PI*2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = '#000';
-      ctx.stroke();
-
-      // Power Bar
-      if (chargePower > 0) {
-        ctx.fillStyle = 'red';
-        ctx.fillRect(activeHomePlayer.pos.x - 15, activeHomePlayer.pos.y - 15, 30 * (chargePower/100), 4);
-        ctx.strokeStyle = 'black';
-        ctx.strokeRect(activeHomePlayer.pos.x - 15, activeHomePlayer.pos.y - 15, 30, 4);
-      }
-
-      // Stamina Bar
-      ctx.fillStyle = '#000';
-      ctx.fillRect(18, 18, 104, 14);
-      ctx.fillStyle = activeHomePlayer.stamina > 20 ? '#10b981' : '#ef4444';
-      ctx.fillRect(20, 20, activeHomePlayer.stamina, 10);
-      
-      // Active Player Name
-      ctx.fillStyle = 'white';
-      ctx.font = '10px "Press Start 2P"';
-      ctx.textAlign = 'left';
-      ctx.fillText(activeHomePlayer.data.name, 20, 45);
+      Renderer.renderIndicators(ctx, passTarget, ballOwner, activeHomePlayer, mousePos.current);
+      Renderer.renderBall(ctx, ball);
+      Renderer.renderUI(ctx, activeHomePlayer, chargePower);
 
       animationFrameId = requestAnimationFrame(update);
     };

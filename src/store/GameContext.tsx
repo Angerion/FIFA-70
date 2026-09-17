@@ -4,15 +4,18 @@ import { UserProfile } from "../types";
 interface GameContextType {
   profile: UserProfile;
   addCoins: (amount: number) => void;
+  addRawCoins: (amount: number) => void;
   buyPlayer: (playerId: string, cost: number) => boolean;
   buyMultiplier: (cost: number) => boolean;
+  resetProfile: () => void;
 }
 
 const DEFAULT_PROFILE: UserProfile = {
-  coins: 0,
+  coins: 1000,
   roster: [],
   multipliers: 1,
 };
+
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
@@ -33,6 +36,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       ...prev,
       coins: prev.coins + amount * prev.multipliers,
     }));
+  };
+
+  const addRawCoins = (amount: number) => {
+    setProfile((prev) => ({
+      ...prev,
+      coins: prev.coins + amount,
+    }));
+  };
+
+  const resetProfile = () => {
+    setProfile(DEFAULT_PROFILE);
   };
 
   const buyPlayer = (playerId: string, cost: number) => {
@@ -61,7 +75,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
   return (
     <GameContext.Provider
-      value={{ profile, addCoins, buyPlayer, buyMultiplier }}
+      value={{ profile, addCoins, addRawCoins, buyPlayer, buyMultiplier, resetProfile }}
     >
       {children}
     </GameContext.Provider>
